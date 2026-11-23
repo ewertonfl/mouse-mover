@@ -37,7 +37,7 @@
     <section class="card" aria-labelledby="heading">
       <div class="mark" aria-hidden="true">◩</div>
       <h1 id="heading">Mouse Mover</h1>
-      <p>Um padrão preto e branco, semelhante a um QR gigante, que se desloca continuamente pela tela.</p>
+      <p>Um padrão preto e branco, semelhante a um QR gigante. A direção e a velocidade mudam aleatoriamente a cada 1 a 5 segundos, sem parar.</p>
       <button class="go" id="go" type="button">⛶ ABRIR EM TELA CHEIA</button>
       <div class="tips">
         <div><kbd>Espaço</kbd> pausa / retoma o movimento.</div>
@@ -57,8 +57,17 @@
       const go = document.getElementById('go');
       const err = document.getElementById('error');
       let running = true;
-      let phase = 0;
       let previous = 0;
+      let offsetX = 0;
+      let offsetY = 0;
+      let directionIndex = -1;
+      let remainingSegmentMs = 0;
+      let velocityX = 0, velocityY = 0;
+      const directions = [
+        [1,0], [-1,0], [0,1], [0,-1],
+        [Math.SQRT1_2,Math.SQRT1_2], [Math.SQRT1_2,-Math.SQRT1_2],
+        [-Math.SQRT1_2,Math.SQRT1_2], [-Math.SQRT1_2,-Math.SQRT1_2]
+      ];
       let w = innerWidth, h = innerHeight;
       let wakeLock = null;
       const N = 91, CELL = 12, SIZE = N * CELL;
@@ -96,12 +105,31 @@
       addEventListener('resize', resize);
       resize();
 
-      // Trajeto circular irregular, sem pausas programadas nem repetições bruscas.
+      // Cada trecho dura de 1 a 5 segundos, com nova direção e velocidade.
+      // Usamos tempo efetivo de animação para que pausar não consuma o trecho.
+      function chooseMotion() {
+        let next = Math.floor(Math.random() * (directions.length - 1));
+        if (directionIndex >= 0 && next >= directionIndex) next++;
+        directionIndex = next;
+        const speed = 95 + Math.random() * 155; // pixels por segundo
+        velocityX = directions[next][0] * speed;
+        velocityY = directions[next][1] * speed;
+        remainingSegmentMs = 1000 + Math.random() * 4000;
+      }
+      function advanceMotion(milliseconds) {
+        while (milliseconds > 0) {
+          if (remainingSegmentMs <= 0) chooseMotion();
+          const step = Math.min(milliseconds, remainingSegmentMs);
+          offsetX = (offsetX + velocityX * step / 1000) % SIZE;
+          offsetY = (offsetY + velocityY * step / 1000) % SIZE;
+          remainingSegmentMs -= step;
+          milliseconds -= step;
+        }
+      }
+      chooseMotion();
       function draw() {
-        const x = 142 * Math.sin(phase * 1.8) + 31 * Math.sin(phase * .63);
-        const y = 112 * Math.cos(phase * 1.8) + 29 * Math.cos(phase * .79);
-        const ox = ((x % SIZE) + SIZE) % SIZE;
-        const oy = ((y % SIZE) + SIZE) % SIZE;
+        const ox = ((offsetX % SIZE) + SIZE) % SIZE;
+        const oy = ((offsetY % SIZE) + SIZE) % SIZE;
         ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
         // Desenha o mesmo mosaico até cobrir a tela inteira, sem faixas vazias.
         for (let py=oy-SIZE;py<h;py+=SIZE)
@@ -109,7 +137,7 @@
             ctx.drawImage(tile, Math.round(px), Math.round(py));
       }
       function frame(timestamp) {
-        if (previous && running) phase += Math.min((timestamp-previous)/1000, .1);
+        if (previous && running) advanceMotion(Math.min(timestamp-previous, 100));
         previous = timestamp;
         draw();
         requestAnimationFrame(frame);

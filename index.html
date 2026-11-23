@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#000000">
+  <meta name="description" content="Padrão visual de alto contraste com movimento contínuo para testes com mouse óptico.">
+  <title>Mouse Mover | Padrão em movimento</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; background: #fff; }
+    body { touch-action: manipulation; }
+    #pattern { position: fixed; inset: 0; display: block; width: 100vw; height: 100vh; image-rendering: pixelated; cursor: none; background: #fff; }
+    #landing { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(2, 8, 15, .8); z-index: 3; }
+    #landing[hidden] { display: none; }
+    .card { width: min(460px,100%); padding: clamp(20px,4vw,34px); color: #ecf4fc; background: #101d2a; border: 1px solid #3b5064; border-radius: 20px; box-shadow: 0 20px 70px #0009; text-align: center; }
+    .mark { font-size: 38px; line-height: 1; margin: 0 0 14px; }
+    h1 { font-size: clamp(24px,6vw,34px); margin: 0 0 12px; letter-spacing: -.045em; }
+    p { font-size: 15px; line-height: 1.5; color: #c4d0dc; margin: 0 0 18px; }
+    .go { appearance: none; width: 100%; padding: 16px 20px; font: 800 17px inherit; font-family: inherit; font-size: 17px; font-weight: 800; border: none; border-radius: 11px; background: #f5c13d; color: #111923; cursor: pointer; }
+    .go:hover, .go:focus-visible { background: #ffd769; outline: 3px solid #ffffff90; outline-offset: 3px; }
+    .tips { display: grid; gap: 7px; margin-top: 18px; font-size: 13px; color: #aebfcf; text-align: left; }
+    kbd { display: inline-block; background: #304359; border: 1px solid #53697e; border-radius: 5px; padding: 2px 6px; font-family: inherit; color: #fff; }
+    #status { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 2; display: none; padding: 13px 25px; border-radius: 12px; background: #000d; border: 2px solid #fff; color: white; font-size: clamp(17px,3vw,28px); font-weight: 900; pointer-events: none; text-align: center; white-space: nowrap; }
+    body.paused #status { display: block; }
+    body:not(.fullscreen) #status { display:none; }
+    #error { margin: 12px 0 0; font-size: 13px; color:#ffb4a7; }
+    #error:empty { display:none; }
+    @media (prefers-reduced-motion: reduce) { /* A animação continua por solicitação explícita do usuário. */ }
+  </style>
+</head>
+<body>
+  <canvas id="pattern" aria-label="Padrão geométrico preto e branco em movimento"></canvas>
+  <div id="status" aria-live="polite">⏸ PAUSADO<br><small style="font-size: .5em; font-weight: 500;">ESPAÇO para continuar</small></div>
+  <div id="landing">
+    <section class="card" aria-labelledby="heading">
+      <div class="mark" aria-hidden="true">◩</div>
+      <h1 id="heading">Mouse Mover</h1>
+      <p>Um padrão preto e branco, semelhante a um QR gigante, que se desloca continuamente pela tela.</p>
+      <button class="go" id="go" type="button">⛶ ABRIR EM TELA CHEIA</button>
+      <div class="tips">
+        <div><kbd>Espaço</kbd> pausa / retoma o movimento.</div>
+        <div><kbd>Esc</kbd> sai da tela cheia.</div>
+        <div>Celular: um toque no padrão pausa / retoma.</div>
+        <div>Para testar um mouse óptico, apoie o sensor sobre a tela com cuidado. A compatibilidade varia por dispositivo.</div>
+      </div>
+      <p id="error" role="alert"></p>
+    </section>
+  </div>
+  <script>
+    (() => {
+      'use strict';
+      const canvas = document.getElementById('pattern');
+      const ctx = canvas.getContext('2d', {alpha: false});
+      const landing = document.getElementById('landing');
+      const go = document.getElementById('go');
+      const err = document.getElementById('error');
+      let running = true;
+      let phase = 0;
+      let previous = 0;
+      let w = innerWidth, h = innerHeight;
+      let wakeLock = null;
+      const N = 91, CELL = 12, SIZE = N * CELL;
+      const tile = document.createElement('canvas');
+      tile.width = tile.height = SIZE;
+      const tc = tile.getContext('2d', {alpha: false});
+      let seed = 0x91a2c7e5;
+      const random = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) / 4294967296; };
+
+      // Um padrão de alto contraste SEM dados de QR code. Nenhum recurso externo.
+      const bits = Array.from({length: N}, () => Array.from({length: N}, () => random() > .49 ? 1 : 0));
+      const finder = (left, top) => {
+        for (let y = -1; y < 8; y++) for (let x = -1; x < 8; x++) {
+          const xx = left+x, yy = top+y;
+          if (xx < 0 || yy < 0 || xx >= N || yy >= N) continue;
+          const outer = x >= 0 && x <= 6 && y >= 0 && y <= 6;
+          const border = x === 0 || x === 6 || y === 0 || y === 6;
+          const center = x >= 2 && x <= 4 && y >= 2 && y <= 4;
+          bits[yy][xx] = outer && (border || center) ? 1 : 0;
+        }
+      };
+      finder(5, 5); finder(N-12, 5); finder(5, N-12);
+      tc.fillStyle = '#fff'; tc.fillRect(0,0,SIZE,SIZE);
+      tc.fillStyle = '#000';
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (bits[y][x]) tc.fillRect(x*CELL, y*CELL, CELL, CELL);
+
+      function resize() {
+        const dpr = Math.min(devicePixelRatio || 1, 2);
+        w = innerWidth; h = innerHeight;
+        canvas.width = Math.max(1, Math.round(w*dpr));
+        canvas.height = Math.max(1, Math.round(h*dpr));
+        ctx.setTransform(dpr,0,0,dpr,0,0);
+        ctx.imageSmoothingEnabled = false;
+      }
+      addEventListener('resize', resize);
+      resize();
+
+      // Trajeto circular irregular, sem pausas programadas nem repetições bruscas.
+      function draw() {
+        const x = 142 * Math.sin(phase * 1.8) + 31 * Math.sin(phase * .63);
+        const y = 112 * Math.cos(phase * 1.8) + 29 * Math.cos(phase * .79);
+        const ox = ((x % SIZE) + SIZE) % SIZE;
+        const oy = ((y % SIZE) + SIZE) % SIZE;
+        ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
+        // Desenha o mesmo mosaico até cobrir a tela inteira, sem faixas vazias.
+        for (let py=oy-SIZE;py<h;py+=SIZE)
+          for (let px=ox-SIZE;px<w;px+=SIZE)
+            ctx.drawImage(tile, Math.round(px), Math.round(py));
+      }
+      function frame(timestamp) {
+        if (previous && running) phase += Math.min((timestamp-previous)/1000, .1);
+        previous = timestamp;
+        draw();
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+
+      function setRunning(value) {
+        running = value;
+        document.body.classList.toggle('paused', !running);
+        document.title = running ? 'Mouse Mover | Em movimento' : 'Mouse Mover | Pausado';
+      }
+      async function askWakeLock() {
+        if (!('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+        try { wakeLock = await navigator.wakeLock.request('screen'); } catch { /* Opcional, não impede o uso. */ }
+      }
+      async function openFullscreen() {
+        err.textContent = '';
+        if (!document.documentElement.requestFullscreen) {
+          err.textContent = 'Este navegador não permite tela cheia por este botão. O padrão continua funcionando nesta página.';
+          return;
+        }
+        try {
+          // Fullscreen exige um clique/toque real do usuário.
+          await document.documentElement.requestFullscreen({navigationUI:'hide'});
+        } catch {
+          err.textContent = 'Tela cheia bloqueada pelo navegador. Tente novamente ou use F11 no computador.';
+        }
+      }
+      go.addEventListener('click', openFullscreen);
+      function syncFullscreen() {
+        const full = !!document.fullscreenElement;
+        document.body.classList.toggle('fullscreen', full);
+        landing.hidden = full;
+        if (full) askWakeLock();
+        else if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+        // Não pausamos automaticamente ao sair: Espaço controla o movimento.
+      }
+      document.addEventListener('fullscreenchange', syncFullscreen);
+      document.addEventListener('visibilitychange', () => { previous = 0; if (document.visibilityState === 'visible' && document.fullscreenElement) askWakeLock(); });
+      document.addEventListener('keydown', (event) => {
+        if (event.code === 'Space' || event.key === ' ') {
+          if (event.repeat) return;
+          event.preventDefault();
+          if (document.activeElement === go) go.blur();
+          setRunning(!running);
+        }
+        if (event.key === 'Escape' && document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+      });
+      canvas.addEventListener('pointerup', (event) => {
+        if (event.pointerType === 'touch' && document.fullscreenElement) setRunning(!running);
+      });
+      syncFullscreen();
+    })();
+  </script>
+</body>
+</html>
